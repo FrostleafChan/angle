@@ -1,0 +1,76 @@
+name: Build Full ANGLE Library
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-angle:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install basic dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          git curl python3 python3-pip ninja-build g++ cmake pkg-config \
+          libx11-dev libgl1-mesa-dev libxi-dev libxcursor-dev libxrandr-dev \
+          libxdamage-dev libxinerama-dev libdbus-1-dev libasound2-dev \
+          zstd tar lsb-release libvulkan-dev vulkan-tools
+
+    - name: Configure environment
+      run: |
+        echo "DEPOT_TOOLS_PATH=$PWD/depot_tools" >> $GITHUB_ENV
+        echo "ANGLE_SRC_DIR=$PWD/angle" >> $GITHUB_ENV
+        echo "PATH=$PWD/depot_tools:$PATH" >> $GITHUB_ENV
+
+    - name: Install depot_tools
+      run: |
+        git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git ${{ env.DEPOT_TOOLS_PATH }}
+        touch ${{ env.DEPOT_TOOLS_PATH }}/.disable_auto_update
+
+    - name: Fetch ANGLE source
+      run: |
+        mkdir -p ${{ env.ANGLE_SRC_DIR }}
+        cd ${{ env.ANGLE_SRC_DIR }}
+        fetch --nohooks angle
+
+
+    - name: Install ANGLE build dependencies
+      working-directory: ${{ env.ANGLE_SRC_DIR }}
+      run: |
+        sudo ./build/install-build-deps.sh --no-prompt --no-arm --no-chromeos-fonts
+
+    - name: Run gclient hooks
+      working-directory: ${{ env.ANGLE_SRC_DIR }}
+      run: gclient runhooks
+
+    - name: Configure build
+      working-directory: ${{ env.ANGLE_SRC_DIR }}
+      run: |
+        gn gen out/Release --args='
+          is_debug = false
+          target_cpu = "x64"
+          angle_enable_vulkan = true
+          angle_gl_library_variant = "vulkan"
+          use_custom_libcxx = false
+        '
+
+    - name: Build entire ANGLE project
+      working-directory: ${{ env.ANGLE_SRC_DIR }}
+      run: autoninja -C out/Release
+
+    - name: Package entire Release directory
+      run: |
+        cd ${{ env.ANGLE_SRC_DIR }}/out
+        tar -cf angle_full_release.tar Release
+        zstd -T0 -19 --rm angle_full_release.tar
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: angle-full-release
+        path: ${{ env.ANGLE_SRC_DIR }}/out/angle_full_release.tar.zst
+        retention-days: 7
